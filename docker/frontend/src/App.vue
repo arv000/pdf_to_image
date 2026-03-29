@@ -65,7 +65,7 @@ import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
 
 // API配置 - 使用完整的后端地址
-const API_BASE_URL = 'http://10.64.72.141:8000'  // 改为你后端的实际IP
+const API_BASE_URL = 'http://114.67.96.121:8000'  // 改为你后端的实际IP
 
 export default {
   name: 'PdfToImage',
