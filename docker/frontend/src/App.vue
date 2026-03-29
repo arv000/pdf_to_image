@@ -1,60 +1,81 @@
 <template>
-  <div class="pdf-uploader">
+  <div class="container">
+    <h1>PDF转图片工具</h1>
+    
+    <!-- 上传区域 -->
     <div class="upload-area" 
          @dragover.prevent 
          @drop.prevent="handleDrop"
-         @click="triggerFileInput">
-      <input type="file" 
-             ref="fileInput" 
-             @change="handleFileChange" 
-             accept=".pdf" 
-             style="display: none">
-      
-      <div v-if="!file">
-        <i class="upload-icon">📄</i>
-        <p>点击或拖拽 PDF 文件到此区域</p>
-        <p class="hint">支持 .pdf 格式</p>
+         :class="{ 'drag-active': isDragging }">
+      <input 
+        type="file" 
+        ref="fileInput" 
+        @change="handleFileSelect" 
+        accept=".pdf"
+        style="display: none"
+      />
+      <button @click="triggerFileInput" class="upload-btn">
+        选择PDF文件
+      </button>
+      <p>或将文件拖拽到此区域</p>
+      <p class="tip">支持 .pdf 格式</p>
+    </div>
+
+    <!-- 加载状态 -->
+    <div v-if="loading" class="loading">
+      <div class="spinner"></div>
+      <p>正在处理中，请稍候...</p>
+    </div>
+
+    <!-- 错误提示 -->
+    <div v-if="error" class="error">
+      {{ error }}
+      <button @click="error = ''">关闭</button>
+    </div>
+
+    <!-- 图片展示区域 -->
+    <div v-if="images.length > 0" class="result">
+      <h2>转换结果</h2>
+      <div class="image-grid">
+        <div v-for="(img, index) in images" :key="index" class="image-card">
+          <img :src="img.url" :alt="`第${index + 1}页`" 
+               @error="handleImageError(img)" />
+          <div class="image-info">
+            <span>第 {{ index + 1 }} 页</span>
+            <button @click="downloadImage(img.name)" class="download-btn">
+              下载
+            </button>
+          </div>
+        </div>
       </div>
       
-      <div v-else class="file-info">
-        <i class="file-icon">📄</i>
-        <p>{{ file.name }}</p>
-        <p class="file-size">{{ formatFileSize(file.size) }}</p>
-        <button @click.stop="removeFile" class="remove-btn">移除</button>
+      <!-- 批量下载 -->
+      <div class="batch-actions">
+        <button @click="downloadAll" class="batch-download-btn">
+          批量下载全部 (ZIP)
+        </button>
       </div>
-    </div>
-    
-    <div v-if="uploadProgress > 0" class="progress-bar">
-      <div class="progress" :style="{ width: uploadProgress + '%' }"></div>
-      <span>{{ uploadProgress }}%</span>
-    </div>
-    
-    <button @click="uploadFile" 
-            :disabled="!file || uploading"
-            class="upload-btn">
-      {{ uploading ? '上传中...' : '上传 PDF' }}
-    </button>
-    
-    <div v-if="uploadResult" class="result">
-      <p v-if="uploadResult.success" class="success">
-        ✅ 上传成功！文件ID: {{ uploadResult.fileId }}
-      </p>
-      <p v-else class="error">
-        ❌ 上传失败：{{ uploadResult.message }}
-      </p>
     </div>
   </div>
 </template>
 
 <script>
+import axios from 'axios'
+import JSZip from 'jszip'
+import { saveAs } from 'file-saver'
+
+// API配置 - 使用完整的后端地址
+const API_BASE_URL = 'http://10.64.72.141:8000'  // 改为你后端的实际IP
+
 export default {
-  name: 'PdfUploader',
+  name: 'PdfToImage',
   data() {
     return {
-      file: null,
-      uploading: false,
-      uploadProgress: 0,
-      uploadResult: null
+      isDragging: false,
+      loading: false,
+      error: '',
+      images: [],
+      fileId: null
     }
   },
   methods: {
@@ -62,104 +83,166 @@ export default {
       this.$refs.fileInput.click()
     },
     
-    handleFileChange(event) {
-      const selectedFile = event.target.files[0]
-      this.validateAndSetFile(selectedFile)
+    handleFileSelect(event) {
+      const file = event.target.files[0]
+      if (file) {
+        this.uploadFile(file)
+      }
     },
     
     handleDrop(event) {
-      const droppedFile = event.dataTransfer.files[0]
-      this.validateAndSetFile(droppedFile)
-    },
-    
-    validateAndSetFile(file) {
-      if (!file) return
-      
-      // 验证文件类型
-      if (file.type !== 'application/pdf') {
-        this.showError('请选择 PDF 文件')
-        return
+      this.isDragging = false
+      const file = event.dataTransfer.files[0]
+      if (file && file.type === 'application/pdf') {
+        this.uploadFile(file)
+      } else {
+        this.error = '请拖拽PDF文件'
       }
-      
-      // 验证文件大小（例如限制 10MB）
-      const maxSize = 10 * 1024 * 1024
-      if (file.size > maxSize) {
-        this.showError('文件大小不能超过 10MB')
-        return
-      }
-      
-      this.file = file
-      this.uploadResult = null
     },
     
-    removeFile() {
-      this.file = null
-      this.$refs.fileInput.value = ''
-      this.uploadProgress = 0
-    },
-    
-    async uploadFile() {
-      if (!this.file) return
-      
-      this.uploading = true
-      this.uploadProgress = 0
+    async uploadFile(file) {
+      this.loading = true
+      this.error = ''
+      this.images = []
       
       const formData = new FormData()
-      formData.append('file', this.file)
+      formData.append('file', file)
       
       try {
-        const response = await this.$axios.post('/api/upload/pdf', formData, {
+        console.log('开始上传文件:', file.name)
+        
+        const response = await axios.post(`${API_BASE_URL}/upload/`, formData, {
           headers: {
             'Content-Type': 'multipart/form-data'
           },
-          onUploadProgress: (progressEvent) => {
-            this.uploadProgress = Math.round(
-              (progressEvent.loaded * 100) / progressEvent.total
-            )
-          }
+          timeout: 120000  // 增加超时时间到120秒
         })
         
-        this.uploadResult = {
-          success: true,
-          fileId: response.data.fileId,
-          message: '上传成功'
+        console.log('上传响应:', response.data)
+        
+        // 检查响应数据
+        if (response.data && response.data.images) {
+          this.fileId = response.data.file_id
+          
+          // 构建图片URL
+          this.images = response.data.images.map(imagePath => {
+            // 如果路径已经是完整URL，直接使用；否则拼接
+            const imageUrl = imagePath.startsWith('http') 
+              ? imagePath 
+              : `${API_BASE_URL}${imagePath}`
+            
+            return {
+              name: imagePath.split('/').pop(),
+              url: imageUrl
+            }
+          })
+          
+          console.log('图片列表:', this.images)
+        } else {
+          throw new Error('响应数据格式错误')
         }
         
-        // 触发父组件事件
-        this.$emit('upload-success', response.data)
-        
-      } catch (error) {
-        console.error('上传失败:', error)
-        this.uploadResult = {
-          success: false,
-          message: error.response?.data?.message || '网络错误'
+      } catch (err) {
+        console.error('上传失败详情:', err)
+        if (err.response) {
+          // 服务器返回了错误响应
+          console.error('错误响应:', err.response.data)
+          this.error = err.response.data?.detail || `服务器错误: ${err.response.status}`
+        } else if (err.request) {
+          // 请求已发送但没有收到响应
+          console.error('无响应:', err.request)
+          this.error = '无法连接到服务器，请检查后端服务是否运行'
+        } else {
+          // 其他错误
+          this.error = err.message || '上传失败，请重试'
         }
       } finally {
-        this.uploading = false
+        this.loading = false
       }
     },
     
-    formatFileSize(bytes) {
-      if (bytes === 0) return '0 Bytes'
-      const k = 1024
-      const sizes = ['Bytes', 'KB', 'MB', 'GB']
-      const i = Math.floor(Math.log(bytes) / Math.log(k))
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+    handleImageError(img) {
+      console.error('图片加载失败:', img.url)
+      // 可以显示一个占位图
+      img.url = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iI2VlZSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iMTYiIGZpbGw9IiM5OTkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj7lm77niYfliqDovb3kv6Hmga88L3RleHQ+PC9zdmc+'
     },
     
-    showError(message) {
-      // 可以使用 Element UI 或自定义提示
-      alert(message)
+    async downloadImage(fileName) {
+      try {
+        const response = await axios({
+          url: `${API_BASE_URL}/download/${fileName}`,
+          method: 'GET',
+          responseType: 'blob'
+        })
+        
+        const blob = new Blob([response.data], { type: 'image/png' })
+        const link = document.createElement('a')
+        const url = URL.createObjectURL(blob)
+        link.href = url
+        link.download = fileName
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+        
+      } catch (err) {
+        console.error('下载失败:', err)
+        this.error = '下载失败，请重试'
+      }
+    },
+    
+    async downloadAll() {
+      if (this.images.length === 0) return
+      
+      this.loading = true
+      const zip = new JSZip()
+      
+      try {
+        // 并行下载所有图片
+        const downloadPromises = this.images.map(async (img) => {
+          const response = await axios({
+            url: img.url,
+            method: 'GET',
+            responseType: 'blob'
+          })
+          return { name: img.name, data: response.data }
+        })
+        
+        const downloadedFiles = await Promise.all(downloadPromises)
+        
+        // 添加到ZIP
+        downloadedFiles.forEach(file => {
+          zip.file(file.name, file.data)
+        })
+        
+        // 生成ZIP文件
+        const content = await zip.generateAsync({ type: 'blob' })
+        saveAs(content, `pdf_images_${this.fileId || Date.now()}.zip`)
+        
+      } catch (err) {
+        console.error('批量下载失败:', err)
+        this.error = '批量下载失败，请重试'
+      } finally {
+        this.loading = false
+      }
     }
   }
 }
 </script>
 
 <style scoped>
-.pdf-uploader {
-  max-width: 500px;
+/* 保持之前的样式不变 */
+.container {
+  max-width: 1200px;
   margin: 0 auto;
   padding: 20px;
+  font-family: 'Arial', sans-serif;
+}
+
+h1 {
+  text-align: center;
+  color: #333;
+  margin-bottom: 30px;
 }
 
 .upload-area {
@@ -167,97 +250,151 @@ export default {
   border-radius: 8px;
   padding: 40px;
   text-align: center;
+  background: #f9f9f9;
+  transition: all 0.3s ease;
   cursor: pointer;
-  transition: all 0.3s;
-  background-color: #fafafa;
 }
 
-.upload-area:hover {
+.upload-area.drag-active {
   border-color: #409eff;
-  background-color: #f0f9ff;
+  background: #ecf5ff;
 }
 
-.upload-icon, .file-icon {
-  font-size: 48px;
-  display: inline-block;
-  margin-bottom: 10px;
+.upload-btn {
+  background: #409eff;
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 4px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.3s;
 }
 
-.hint {
+.upload-btn:hover {
+  background: #66b1ff;
+}
+
+.tip {
   font-size: 12px;
   color: #999;
   margin-top: 10px;
 }
 
-.file-info {
-  position: relative;
+.loading {
+  text-align: center;
+  margin-top: 30px;
 }
 
-.remove-btn {
-  background-color: #f56c6c;
-  color: white;
-  border: none;
-  padding: 5px 10px;
+.spinner {
+  border: 3px solid #f3f3f3;
+  border-top: 3px solid #409eff;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 10px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.error {
+  background: #fef0f0;
+  color: #f56c6c;
+  padding: 12px;
   border-radius: 4px;
-  cursor: pointer;
-  margin-top: 10px;
-}
-
-.remove-btn:hover {
-  background-color: #f78989;
-}
-
-.progress-bar {
   margin-top: 20px;
-  background-color: #f0f0f0;
-  border-radius: 4px;
-  height: 30px;
-  position: relative;
-  overflow: hidden;
-}
-
-.progress {
-  background-color: #409eff;
-  height: 100%;
-  transition: width 0.3s;
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
-  color: white;
 }
 
-.upload-btn {
-  margin-top: 20px;
-  width: 100%;
-  padding: 10px;
-  background-color: #409eff;
-  color: white;
+.error button {
+  background: none;
   border: none;
-  border-radius: 4px;
+  color: #f56c6c;
   cursor: pointer;
   font-size: 16px;
 }
 
-.upload-btn:disabled {
-  background-color: #a0cfff;
-  cursor: not-allowed;
-}
-
 .result {
-  margin-top: 20px;
-  padding: 10px;
+  margin-top: 40px;
+}
+
+.result h2 {
+  color: #333;
+  margin-bottom: 20px;
+}
+
+.image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 20px;
+}
+
+.image-card {
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  overflow: hidden;
+  background: white;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.image-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+}
+
+.image-card img {
+  width: 100%;
+  height: 200px;
+  object-fit: cover;
+  display: block;
+}
+
+.image-info {
+  padding: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #fafafa;
+}
+
+.download-btn {
+  background: #67c23a;
+  color: white;
+  border: none;
+  padding: 6px 12px;
   border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.3s;
 }
 
-.success {
-  color: #67c23a;
-  background-color: #f0f9eb;
-  padding: 10px;
+.download-btn:hover {
+  background: #85ce61;
 }
 
-.error {
-  color: #f56c6c;
-  background-color: #fef0f0;
-  padding: 10px;
+.batch-actions {
+  margin-top: 30px;
+  text-align: center;
+}
+
+.batch-download-btn {
+  background: #e6a23c;
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background 0.3s;
+}
+
+.batch-download-btn:hover {
+  background: #ebb563;
 }
 </style>

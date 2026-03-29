@@ -7,11 +7,11 @@ COPY package*.json ./
 
 # 设置镜像源并安装依赖
 RUN npm config set registry https://registry.npmmirror.com --global && \
-    npm install
+    npm install && npm install axios jszip file-saver
 
 # 复制源代码并构建
 COPY . .
-RUN npm run build
+RUN npm run build 
 
 # 生产阶段
 FROM nginx:alpine

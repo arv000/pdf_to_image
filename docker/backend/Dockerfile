@@ -15,7 +15,7 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources
 
 # 更新包列表并安装系统依赖
 RUN apt-get update 
-RUN pip install uvicorn 
+RUN pip install uvicorn   PyMuPDF
 
 # 复制并安装 Python 依赖
 COPY requirements.txt .
